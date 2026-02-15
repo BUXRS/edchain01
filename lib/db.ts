@@ -1,11 +1,19 @@
 import postgres from "postgres"
 
+/** Normalize DATABASE_URL if pasted as psql command (e.g. "psql 'postgresql://...'") */
+function normalizeDatabaseUrl(raw: string): string {
+  const trimmed = raw.trim()
+  const psqlMatch = trimmed.match(/^psql\s+['"](.+)['"]\s*$/)
+  if (psqlMatch) return psqlMatch[1].trim()
+  return trimmed
+}
+
 const getDatabaseUrl = () => {
   const url = process.env.DATABASE_URL
   if (!url) {
     return null
   }
-  return url
+  return normalizeDatabaseUrl(url)
 }
 
 // Create SQL client with proper connection pooling
