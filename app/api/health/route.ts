@@ -68,21 +68,32 @@ export async function GET() {
     health.database.error = error instanceof Error ? error.message : "Unknown error"
   }
 
-  // Check RPC HTTP (with timeout)
-  try {
-    const provider = getReadOnlyProvider()
-    const network = await withTimeout(provider.getNetwork(), CHECK_TIMEOUT_MS, "RPC getNetwork")
-    const currentBlock = await withTimeout(provider.getBlockNumber(), CHECK_TIMEOUT_MS, "RPC getBlockNumber")
-    health.rpc.http.connected = true
-    health.rpc.http.chainId = Number(network.chainId)
-    health.rpc.http.currentBlock = currentBlock
-  } catch (error) {
-    health.rpc.http.connected = false
-    health.rpc.http.error = error instanceof Error ? error.message : "Unknown error"
+  // Skip RPC on Vercel (production) by default to save Infura credits. Localhost unchanged (VERCEL not set).
+  // Override: HEALTH_SKIP_RPC=true to skip everywhere; HEALTH_SKIP_RPC=false to run RPC on Vercel.
+  const skipRpc =
+    process.env.HEALTH_SKIP_RPC === "true" ||
+    (process.env.VERCEL === "1" && process.env.HEALTH_SKIP_RPC !== "false")
+
+  if (!skipRpc) {
+    try {
+      const provider = getReadOnlyProvider()
+      const network = await withTimeout(provider.getNetwork(), CHECK_TIMEOUT_MS, "RPC getNetwork")
+      const currentBlock = await withTimeout(provider.getBlockNumber(), CHECK_TIMEOUT_MS, "RPC getBlockNumber")
+      health.rpc.http.connected = true
+      health.rpc.http.chainId = Number(network.chainId)
+      health.rpc.http.currentBlock = currentBlock
+    } catch (error) {
+      health.rpc.http.connected = false
+      health.rpc.http.error = error instanceof Error ? error.message : "Unknown error"
+    }
+  } else {
+    health.rpc.http.error = "skipped (production / HEALTH_SKIP_RPC)"
   }
 
-  // WebSocket check: skip on serverless or use short timeout to avoid hanging
-  try {
+  // WebSocket check: skip when RPC is skipped (saves credits)
+  if (skipRpc) {
+    health.rpc.websocket.error = "skipped (production / HEALTH_SKIP_RPC)"
+  } else try {
     const BASE_RPC_WS_URL = process.env.BASE_RPC_WS_URL || "wss://mainnet.base.org"
     const { JsonRpcProvider } = await import("ethers")
     const wsProvider = new JsonRpcProvider(BASE_RPC_WS_URL, { chainId: CHAIN_ID, name: "base" })
