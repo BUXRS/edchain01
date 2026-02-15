@@ -712,6 +712,43 @@ export async function sendRevokerOnboardingEmail(params: {
   }
 }
 
+// Resend revoker onboarding reminder (login link only)
+export async function sendRevokerOnboardingReminderEmail(params: {
+  to: string
+  revokerName: string
+  universityName: string
+  loginUrl: string
+}): Promise<{ success: boolean; error?: string }> {
+  if (!resend) return { success: true }
+  const { to, revokerName, universityName, loginUrl } = params
+  try {
+    const { error } = await resend.emails.send({
+      from: FROM_EMAIL,
+      to: [to],
+      subject: `Reminder: Complete your revoker onboarding – ${universityName} | BU Blockchain Degree`,
+      html: `
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#0f1219;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<div style="max-width:600px;margin:0 auto;padding:40px 20px;">
+  <div style="background:linear-gradient(135deg,#1a1f36 0%,#2d3a5c 100%);border-radius:16px;padding:40px;border:1px solid #3d4a6a;">
+    <h1 style="color:#f97316;margin:0 0 8px 0;font-size:24px;">Reminder: Complete your revoker setup</h1>
+    <p style="color:#94a3b8;margin:0 0 24px 0;">${universityName} has requested you complete your onboarding.</p>
+    <p style="color:#f0f2f8;font-size:16px;line-height:1.6;">Dear ${revokerName},</p>
+    <p style="color:#f0f2f8;font-size:16px;line-height:1.6;">Please sign in and complete: (1) Sign the NDA/agreement, (2) Submit your wallet address. Use the password you received previously, or "Forgot password?" on the login page.</p>
+    <p style="text-align:center;margin:24px 0;"><a href="${loginUrl}" style="display:inline-block;background:#f97316;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;">Sign in & complete onboarding</a></p>
+    <p style="color:#94a3b8;font-size:14px;text-align:center;">Need help? Contact <a href="mailto:${SUPPORT_EMAIL}" style="color:#d4a853;">${SUPPORT_EMAIL}</a></p>
+  </div>
+</div>
+</body></html>
+      `,
+    })
+    if (error) return { success: false, error: error.message }
+    return { success: true }
+  } catch (e) {
+    return { success: false, error: String(e) }
+  }
+}
+
 // Send verifier onboarding email
 export async function sendVerifierOnboardingEmail(params: {
   to: string
