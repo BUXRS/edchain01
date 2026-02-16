@@ -2,13 +2,25 @@
  * Next.js Instrumentation Hook
  * 
  * This file runs once when the server starts.
- * Used to initialize real-time blockchain sync.
+ * Used to initialize real-time blockchain sync (local/long-running only).
+ *
+ * On Vercel (serverless): indexer/reconciler/health are NOT started to avoid
+ * burning Infura credits. Sync runs only via cron (/api/cron/sync) and on-demand APIs.
  */
+
+const isOnDemandOnly =
+  process.env.VERCEL === "1" || process.env.RPC_ON_DEMAND_ONLY === "true"
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     // Only run on server-side
     try {
+      // ✅ Vercel / on-demand mode: no background indexer or RPC (saves Infura credits)
+      if (isOnDemandOnly) {
+        console.log('[Instrumentation] RPC on-demand only (Vercel or RPC_ON_DEMAND_ONLY). Indexer, reconciler, and health monitoring disabled. Sync via cron + user/admin actions only.')
+        return
+      }
+
       // ✅ Require database to be reachable before starting indexer (avoids ECONNREFUSED spam)
       const { pingDatabase } = await import('./lib/db')
       const dbOk = await pingDatabase().catch(() => false)

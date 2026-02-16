@@ -1,11 +1,15 @@
 /**
  * Auto Sync Initialization
- * 
+ *
  * This module automatically starts blockchain sync services when the server starts.
- * Import this in your app initialization or middleware.
+ * On Vercel / RPC_ON_DEMAND_ONLY: auto sync is skipped to save Infura credits.
+ * Sync then runs only via cron (/api/cron/sync) and on-demand (admin "Sync now", etc.).
  */
 
 let syncStarted = false
+
+const isOnDemandOnly =
+  process.env.VERCEL === "1" || process.env.RPC_ON_DEMAND_ONLY === "true"
 
 /**
  * Initialize and start automatic blockchain sync
@@ -17,9 +21,15 @@ export async function initializeAutoSync() {
     return
   }
 
+  // Skip auto sync on Vercel / on-demand mode (saves RPC credits)
+  if (isOnDemandOnly) {
+    console.log("[AutoSyncInit] RPC on-demand only: auto sync disabled. Use cron or manual sync.")
+    return
+  }
+
   // Only start in production or when explicitly enabled
-  const shouldStart = 
-    process.env.NODE_ENV === "production" || 
+  const shouldStart =
+    process.env.NODE_ENV === "production" ||
     process.env.ENABLE_AUTO_SYNC === "true"
 
   if (!shouldStart) {
@@ -70,10 +80,13 @@ export async function shutdownAutoSync() {
   }
 }
 
-// Auto-start in server environments
-if (typeof window === "undefined" && process.env.ENABLE_AUTO_SYNC !== "false") {
-  // Delay initialization to avoid blocking server startup
+// Auto-start in server environments (skipped when isOnDemandOnly)
+if (
+  typeof window === "undefined" &&
+  process.env.ENABLE_AUTO_SYNC !== "false" &&
+  !isOnDemandOnly
+) {
   setTimeout(() => {
     initializeAutoSync().catch(console.error)
-  }, 5000) // Start after 5 seconds
+  }, 5000)
 }

@@ -6,7 +6,11 @@
     "build": "cross-env BASELINE_BROWSER_MAPPING_IGNORE_OLD_DATA=true BROWSERSLIST_IGNORE_OLD_DATA=true next build --webpack",
     "dev": "cross-env BASELINE_BROWSER_MAPPING_IGNORE_OLD_DATA=true BROWSERSLIST_IGNORE_OLD_DATA=true next dev",
     "lint": "eslint .",
-    "start": "next start"
+    "start": "next start",
+    "db:setup": "node scripts/setup-database.js",
+    "db:setup:local": "cross-env ALLOW_LOCAL_SCHEMA=yes node scripts/setup-database.js",
+    "db:setup:local:create": "cross-env ALLOW_LOCAL_SCHEMA=yes CREATE_DB=1 node scripts/setup-database.js",
+    "db:setup:production": "node scripts/setup-database.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

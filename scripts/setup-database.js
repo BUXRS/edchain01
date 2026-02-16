@@ -1,180 +1,229 @@
 #!/usr/bin/env node
-
 /**
- * Database Setup Script
- * 
- * This script runs all SQL migration files to set up the database schema.
- * 
- * Usage: node scripts/setup-database.js
- * 
- * Make sure DATABASE_URL is set in your .env.local file
+ * Full database setup: (optionally) create DB, then apply complete schema.
+ * Use for local reset or production (Neon) initial setup.
+ *
+ * ENV:
+ *   DATABASE_URL     - From .env.local / .env if not set. Use Neon DIRECT URL for production.
+ *   ALLOW_LOCAL_SCHEMA=yes - Required when DATABASE_URL is localhost (safety).
+ *   CREATE_DB=1      - If set and URL is local, create the database if it doesn't exist.
+ *
+ * USAGE:
+ *   Local (reset schema; DB must exist):
+ *     npm run db:setup:local
+ *   Local (create DB if missing, then schema):
+ *     npm run db:setup:local:create
+ *   Production (set Neon DIRECT URL first):
+ *     $env:DATABASE_URL="postgresql://..."; npm run db:setup
  */
 
 const postgres = require('postgres')
 const fs = require('fs')
 const path = require('path')
 
-// Try to load .env.local manually (simple approach without dotenv dependency)
-try {
-  const envFile = fs.readFileSync('.env.local', 'utf8')
-  envFile.split('\n').forEach(line => {
-    const match = line.match(/^([^#=]+)=(.*)$/)
-    if (match) {
-      const key = match[1].trim()
-      const value = match[2].trim().replace(/^["']|["']$/g, '')
-      if (!process.env[key]) {
-        process.env[key] = value
-      }
-    }
-  })
-} catch (err) {
-  // .env.local might not exist, that's okay
-}
+const ROOT = path.join(__dirname, '..')
+const SCHEMA_FILE = path.join(__dirname, '000-recreate-complete-database.sql')
 
-const DATABASE_URL = process.env.DATABASE_URL
-
-if (!DATABASE_URL) {
-  console.error('❌ Error: DATABASE_URL is not set in .env.local')
-  process.exit(1)
-}
-
-const sql = postgres(DATABASE_URL, {
-  max: 10,
-  idle_timeout: 20,
-  connect_timeout: 10,
-})
-
-const migrationFiles = [
-  '001-create-schema.sql',
-  '002-add-missing-fields.sql',
-  'add-onboarding-fields.sql'
-]
-
-async function runMigrations() {
-  console.log('🚀 Starting database setup...\n')
-  console.log(`📊 Database: ${DATABASE_URL.split('@')[1]?.split('/')[0] || 'Unknown'}\n`)
-
-  for (const file of migrationFiles) {
-    const filePath = path.join(__dirname, file)
-    
-    if (!fs.existsSync(filePath)) {
-      console.log(`⚠️  Skipping ${file} (file not found)`)
-      continue
-    }
-
-    console.log(`📝 Running ${file}...`)
-    
+// Load .env.local then .env if DATABASE_URL not set
+function loadEnv() {
+  if (process.env.DATABASE_URL) return
+  for (const file of ['.env.local', '.env']) {
+    const envPath = path.join(ROOT, file)
     try {
-      const content = fs.readFileSync(filePath, 'utf8')
-      
-      // Split by semicolon and filter out empty statements
-      const statements = content
-        .split(';')
-        .map(s => s.trim())
-        .filter(s => s.length > 0 && !s.startsWith('--'))
-
-      let successCount = 0
-      let errorCount = 0
-
-      for (const statement of statements) {
-        if (statement.trim()) {
-          try {
-            await sql.unsafe(statement + ';')
-            successCount++
-          } catch (err) {
-            // Ignore "already exists" errors (IF NOT EXISTS)
-            if (err.message.includes('already exists') || 
-                err.message.includes('duplicate') ||
-                err.message.includes('IF NOT EXISTS')) {
-              // This is expected, continue
-              successCount++
-            } else {
-              console.error(`   ⚠️  Warning: ${err.message.split('\n')[0]}`)
-              errorCount++
-            }
-          }
+      const content = fs.readFileSync(envPath, 'utf8')
+      content.split('\n').forEach((line) => {
+        const match = line.match(/^([^#=]+)=(.*)$/)
+        if (match) {
+          const key = match[1].trim()
+          const value = match[2].trim().replace(/^["']|["']$/g, '')
+          if (!process.env[key]) process.env[key] = value
         }
-      }
-
-      if (errorCount === 0) {
-        console.log(`   ✅ ${file} completed successfully\n`)
-      } else {
-        console.log(`   ⚠️  ${file} completed with ${errorCount} warnings\n`)
-      }
-    } catch (err) {
-      console.error(`   ❌ Error running ${file}: ${err.message}\n`)
-    }
-  }
-
-  // Verify tables were created
-  console.log('🔍 Verifying database setup...\n')
-  
-  try {
-    const tables = await sql`
-      SELECT table_name 
-      FROM information_schema.tables 
-      WHERE table_schema = 'public' 
-      ORDER BY table_name
-    `
-    
-    const expectedTables = [
-      'admin_users',
-      'activity_logs',
-      'degrees',
-      'issuers',
-      'pending_approvals',
-      'revokers',
-      'universities',
-      'university_registrations'
-    ]
-
-    console.log('📋 Created tables:')
-    const createdTables = tables.map(t => t.table_name)
-    
-    expectedTables.forEach(table => {
-      if (createdTables.includes(table)) {
-        console.log(`   ✅ ${table}`)
-      } else {
-        console.log(`   ❌ ${table} (missing)`)
-      }
-    })
-
-    console.log('\n✅ Database setup complete!')
-    console.log('\n📌 Next steps:')
-    console.log('   1. Create an admin account: curl http://localhost:3000/api/auth/setup')
-    console.log('   2. Start the app: pnpm dev')
-    console.log('   3. Login at: http://localhost:3000/admin/login')
-    
-  } catch (err) {
-    console.error('❌ Error verifying setup:', err.message)
+      })
+    } catch (_) {}
   }
 }
 
-// Test database connection first
-async function testConnection() {
+function parseDatabaseUrl(input) {
+  let url = (input || '').trim()
+  const psqlMatch = url.match(/^psql\s+['"](.+)['"]\s*$/)
+  if (psqlMatch) url = psqlMatch[1].trim()
+  if (!url) return null
   try {
-    await sql`SELECT NOW()`
-    return true
-  } catch (err) {
-    console.error('❌ Database connection failed:', err.message)
-    console.error('\n💡 Make sure:')
-    console.error('   1. DATABASE_URL is correct in .env.local')
-    console.error('   2. Your database is accessible')
-    console.error('   3. Network/firewall allows connections')
-    return false
+    const u = new URL(url.replace(/^postgres:\/\//, 'postgresql://'))
+    const dbName = u.pathname.replace(/^\//, '').split('?')[0].trim()
+    return { url, dbName: dbName || null }
+  } catch (_) {
+    return { url, dbName: null }
   }
+}
+
+function isLocalUrl(url) {
+  if (!url) return false
+  const isLocalHost = url.includes('localhost') || url.includes('127.0.0.1')
+  const isCloud = /\.neon\.tech|\.supabase\.co|railway\.app|render\.com/i.test(url)
+  return isLocalHost && !isCloud
+}
+
+async function ensureDatabaseExists(targetUrl, dbName) {
+  if (!dbName || !/^[a-zA-Z0-9_]+$/.test(dbName)) {
+    console.log('   ⚠️ Could not parse or validate DB name; skipping CREATE DATABASE.')
+    return
+  }
+  const u = new URL(targetUrl.replace(/^postgres:\/\//, 'postgresql://'))
+  u.pathname = '/postgres'
+  const postgresUrl = u.toString()
+  const sql = postgres(postgresUrl, { max: 1, connect_timeout: 10 })
+  try {
+    const exists = await sql`SELECT 1 FROM pg_database WHERE datname = ${dbName}`
+    if (exists.length > 0) {
+      console.log('   Database "' + dbName + '" already exists.')
+    } else {
+      await sql.unsafe('CREATE DATABASE ' + dbName)
+      console.log('   Created database "' + dbName + '".')
+    }
+  } catch (e) {
+    if (e.message && e.message.includes('already exists')) {
+      console.log('   Database "' + dbName + '" already exists.')
+    } else {
+      throw e
+    }
+  } finally {
+    await sql.end()
+  }
+}
+
+async function runSchema(url) {
+  const sql = postgres(url, { max: 2, connect_timeout: 15 })
+
+  if (!fs.existsSync(SCHEMA_FILE)) {
+    await sql.end()
+    throw new Error('Schema file not found: ' + SCHEMA_FILE)
+  }
+
+  const content = fs.readFileSync(SCHEMA_FILE, 'utf8')
+  const rawStatements = content
+    .split(/\s*;\s*[\r\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+  const statements = rawStatements.map((s) => (s.endsWith(';') ? s : s + ';'))
+
+  await sql.unsafe('SET client_min_messages TO ERROR')
+
+  const isTableOrDrop = (s) => {
+    const t = s.replace(/^\s*--[^\n]*/gm, '').trim()
+    return /^DROP\s+TABLE/i.test(t) || /^CREATE\s+TABLE/i.test(t) || /^INSERT\s+INTO/i.test(t)
+  }
+  const isIndexOrComment = (s) => {
+    const t = s.replace(/^\s*--[^\n]*/gm, '').trim()
+    return /^CREATE\s+(UNIQUE\s+)?INDEX/i.test(t) || /^COMMENT\s+ON/i.test(t)
+  }
+  const phase1 = statements.filter(isTableOrDrop)
+  const phase2 = statements.filter(isIndexOrComment)
+
+  console.log('   Phase 1: ' + phase1.length + ' statements (DROP/CREATE TABLE/INSERT)')
+  let ok = 0,
+    err = 0
+  for (const stmt of phase1) {
+    try {
+      await sql.unsafe(stmt)
+      ok++
+    } catch (e) {
+      if (e.message && (e.message.includes('already exists') || e.message.includes('duplicate'))) ok++
+      else {
+        console.error('   ⚠️', (e.message || '').split('\n')[0])
+        err++
+      }
+    }
+  }
+  console.log('   Phase 1 done: ' + ok + ' ok, ' + err + ' errors')
+
+  console.log('   Phase 2: ' + phase2.length + ' statements (CREATE INDEX / COMMENT)')
+  ok = 0
+  err = 0
+  for (const stmt of phase2) {
+    try {
+      await sql.unsafe(stmt)
+      ok++
+    } catch (e) {
+      if (e.message && (e.message.includes('already exists') || e.message.includes('duplicate'))) ok++
+      else {
+        console.error('   ⚠️', (e.message || '').split('\n')[0])
+        err++
+      }
+    }
+  }
+  console.log('   Phase 2 done: ' + ok + ' ok, ' + err + ' errors')
+
+  try {
+    await sql.unsafe(`
+      CREATE TABLE IF NOT EXISTS admin_notifications (
+        id SERIAL PRIMARY KEY,
+        admin_id INTEGER NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        message TEXT,
+        related_entity_type VARCHAR(50),
+        related_entity_id INTEGER,
+        action_url VARCHAR(500),
+        is_read BOOLEAN DEFAULT false,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `)
+    console.log('   ✅ admin_notifications table ensured')
+  } catch (e) {
+    if (!e.message?.includes('already exists')) console.error('   ⚠️ admin_notifications:', e.message)
+  }
+
+  const tables = await sql`
+    SELECT table_name FROM information_schema.tables
+    WHERE table_schema = 'public' ORDER BY table_name
+  `
+  console.log('')
+  console.log('📋 Tables in public schema: ' + tables.length)
+  tables.forEach((t) => console.log('   ', t.table_name))
+  console.log('')
+  console.log('✅ Database setup complete. App can use this database.')
+  await sql.end()
 }
 
 async function main() {
-  const connected = await testConnection()
-  if (!connected) {
+  loadEnv()
+  const raw = process.env.DATABASE_URL
+  if (!raw) {
+    console.error('❌ DATABASE_URL is not set. Set it in the shell or in .env.local / .env')
     process.exit(1)
   }
 
-  await runMigrations()
+  const { url, dbName } = parseDatabaseUrl(raw)
+  if (!url) {
+    console.error('❌ DATABASE_URL is not a valid URL.')
+    process.exit(1)
+  }
+
+  const local = isLocalUrl(url)
+  if (local && process.env.ALLOW_LOCAL_SCHEMA !== 'yes') {
+    console.error('❌ DATABASE_URL points to LOCAL. This script would DROP all local tables and data.')
+    console.error('   To run against local: npm run db:setup:local  or  db:setup:local:create')
+    console.error('   To run against production: set DATABASE_URL to your Neon DIRECT URL in the shell.')
+    process.exit(1)
+  }
+
+  const createDb = process.env.CREATE_DB === '1' && local && dbName
+  const target = url
+  console.log('🚀 Database setup')
+  console.log('   Target: ' + (target.split('@')[1] || target.split('/').pop() || 'unknown'))
+  console.log('')
+
+  if (createDb) {
+    console.log('   Ensuring database exists...')
+    await ensureDatabaseExists(target, dbName)
+    console.log('')
+  }
+
+  await runSchema(target)
 }
 
-main().catch(err => {
-  console.error('❌ Fatal error:', err)
+main().catch((e) => {
+  console.error('❌', e.message || e)
   process.exit(1)
 })
